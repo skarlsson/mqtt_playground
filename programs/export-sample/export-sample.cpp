@@ -76,9 +76,9 @@ int main(int argc, char* argv[])
 
     std::vector<simulated_data> next_tx;
     next_tx.push_back({ "alarm", "s0", 0, 1000});
-    next_tx.push_back({ "dd", "s1", 0, 100});
-    next_tx.push_back({ "dd", "msg2", 0, 100});
-    next_tx.push_back({ "dd", "msg3", 0, 1000});
+    next_tx.push_back({ "dd", "s1", 0, 10});
+    next_tx.push_back({ "dd", "msg2", 0, 10});
+    next_tx.push_back({ "dd", "msg3", 0, 10});
 
     while(true){
       auto now = mqtt::milliseconds_since_epoch();
