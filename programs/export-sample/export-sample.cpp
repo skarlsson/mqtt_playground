@@ -22,6 +22,7 @@ const string PERSIST_DIR { "data-persist" };
 struct simulated_data {
   std::string topic;
   std::string name;
+  std::string value;
   int64_t next_tx=0;
   int64_t interval=1000;
 };
@@ -67,26 +68,28 @@ int main(int argc, char* argv[])
     uniform_int_distribution<> dis(0, 100);
 
 	try {
+    mqtt::mqtt_handler handler(&cli, 8, 200);
+
     LOG(INFO) << "Connecting to server '" << mqtt_endpoint << "'...";
     cli.connect(connOpts)->wait();
     LOG(INFO) << "OK";
 
-    mqtt::mqtt_handler handler(&cli, 8, 200);
     handler.init();
 
     std::vector<simulated_data> next_tx;
-    next_tx.push_back({ "alarm", "s0", 0, 1000});
-    next_tx.push_back({ "dd", "s1", 0, 10});
-    next_tx.push_back({ "dd", "msg2", 0, 10});
-    next_tx.push_back({ "dd", "msg3", 0, 10});
+    next_tx.push_back({ "alarm", "mob", "{\"lat\": 59.334591, \"lng\": 18.063240}", 0, 10000});
+    //next_tx.push_back({ "m", "EngineSpeed", "1843",0, 1000});
+    //next_tx.push_back({ "m", "pos", "{\"lat\": 59.334591, \"lng\": 18.063240}",0, 1000});
+    //next_tx.push_back({ "m", "RudderPosition", "2.0",0, 1000});
+
 
     while(true){
       auto now = mqtt::milliseconds_since_epoch();
       int prio=0;
       for (std::vector<simulated_data>::iterator i=next_tx.begin();i!=next_tx.end(); ++i, ++prio){
         if (i->next_tx<=now) {
-          auto payload = std::make_shared<const std::string>("{ \"value\": \"whatever\", ts: " + std::to_string(now) + "}");
-          auto msg = std::make_unique<mqtt::message2>(i->topic + "/" + i->name, payload);
+          auto payload = std::make_shared<const std::string>("{ \""+ i->name +"\": " + i->value + ", \"ts\" : "  + std::to_string(now) + "}");
+          auto msg = std::make_unique<mqtt::message2>(i->topic, payload);
           handler.push_back(prio, std::move(msg));
           i->next_tx = now + i->interval;
         }
