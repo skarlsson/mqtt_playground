@@ -5,9 +5,12 @@
 #define KEEP_ALIVE_INTERVALL 1000
 #define MAX_PAYLOAD_IN_FLIGHT 100
 
+// should we have this at all????
+const int MAX_BUFFERED_MSGS = 120;	// 120 * 5sec => 10min off-line buffering
+const std::string PERSIST_DIR { "data-persist" };
+
 namespace mqtt{
   void mqtt_handler::publish_listener::on_success(const mqtt::token& tok){
-    LOG(INFO) << "publish_listener::on_success";
     handler_->on_publish_success();
   }
 
@@ -32,21 +35,26 @@ namespace mqtt{
 
   // Callback for when a message arrives.
   void mqtt_handler::callback::message_arrived(mqtt::const_message_ptr msg) {
-    LOG(INFO) << "\ttopic: '" << msg->get_topic() << "'" << "\tpayload: '" << msg->to_string() << ", rx_ts: " << mqtt::milliseconds_since_epoch();
-}
+    //LOG(INFO) << "\ttopic: '" << msg->get_topic() << "'" << "\tpayload: '" << msg->to_string() << ", rx_ts: " << mqtt::milliseconds_since_epoch();
+    handler_->on_message_arrived(msg);
+  }
 
 // seems to never be called
 void mqtt_handler::callback::delivery_complete(mqtt::delivery_token_ptr tok) {
   LOG(INFO) << "delivery_complete token: "   << tok->get_message_id();
   }
 
-  mqtt_handler::mqtt_handler(mqtt::async_client* client, size_t priority_levels, size_t capacity)
+  mqtt_handler::mqtt_handler(std::string mqtt_endpoint, mqtt::connect_options connect_options, size_t priority_levels, size_t capacity)
   : queue_(priority_levels, capacity)
-  , client_(client)
+  , mqtt_endpoint_(mqtt_endpoint)
+  , connect_options_(connect_options)
   , action_listener_(this)
   , publish_listener_(this)
   , tx_unacked_bytes_(0)
     , thread_([this](){ thread(); }){
+    // override required params to be sure
+    connect_options_.set_automatic_reconnect(true);
+    client_ = std::make_unique<mqtt::async_client>(mqtt_endpoint_, "", MAX_BUFFERED_MSGS, PERSIST_DIR); // todo check clientid & persisted messages - should be disabled???
     client_->set_callback(action_listener_);
   }
 
@@ -73,15 +81,18 @@ void mqtt_handler::callback::delivery_complete(mqtt::delivery_token_ptr tok) {
     exit_ = true;
   }
 
-  void mqtt_handler::reconnect(){
+  /*void mqtt_handler::reconnect(){
     //client_->reconnect();
-  }
+  }*/
 
   void mqtt_handler::on_connected(){
     LOG(INFO) << "connected";
+
     LOG(INFO) << "subscribing";
-    //client_->subscribe("alarm", 1, nullptr, action_listener_); // can be another instance to separate subscriptions
-    client_->subscribe("alarm", 1); // todo make tis an action listener (separate that knows if the subscripotion failes)
+    // what happens if the connection goes down here???
+    for (auto i : message_callbacks_){
+      client_->subscribe(i.first, 1); // todo make tis an action listener (separate that knows if the subscripotion failes)
+    }
   }
 
   void mqtt_handler::on_connection_lost(){
@@ -98,9 +109,28 @@ void mqtt_handler::callback::delivery_complete(mqtt::delivery_token_ptr tok) {
     pop_pending_tx();
   }
 
+  void  mqtt_handler::on_message_arrived(mqtt::const_message_ptr msg) {
+    auto item = message_callbacks_.find(msg->get_topic());
+    if (item != message_callbacks_.end()){
+      item->second(item->first, msg->to_string());
+    }
+  }
+
   void mqtt_handler::thread(){
     while (!start_ && !exit_ ){
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    while (!exit_ ) {
+      try {
+        LOG(INFO) << "Initial connect to server '" << mqtt_endpoint_ << "'...";
+        client_->connect(connect_options_)->wait();
+        LOG(INFO) << "initial connection successful - starting operations";
+        break;
+      }catch (std::exception& e) {
+        LOG(INFO) << "connect failed: " << e.what();
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5000));
     }
 
     while (!exit_ ) {
@@ -113,7 +143,6 @@ void mqtt_handler::callback::delivery_complete(mqtt::delivery_token_ptr tok) {
           tx_unacked_bytes_  -= message_size;
         }
         LOG(INFO) << "connection lost - dropped " << count << " messages";
-
 
         continue;
         /*LOG(INFO) << "connecting...";
@@ -139,7 +168,7 @@ void mqtt_handler::callback::delivery_complete(mqtt::delivery_token_ptr tok) {
       while (!exit_ && tx_unacked_bytes_ < MAX_PAYLOAD_IN_FLIGHT) {
         auto msg = queue_.get_next();
         if (msg) {
-          LOG(INFO) << "sending key " << msg->key.c_str() << " value: "" << " << msg->val.c_str();
+          LOG(INFO) << "sending key " << msg->key.c_str() << " value: " << msg->val.c_str();
           auto pubmsg = mqtt::make_message(msg->key.to_string(), msg->val);
           tx_unacked_bytes_ += msg->val.size();
           pending_tx_.put(msg->val.size()); // make sure we add it first if we get the callback before returning

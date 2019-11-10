@@ -1,6 +1,8 @@
 #include <chrono>
 #include <atomic>
 #include <thread>
+#include <functional>
+#include <map>
 #include <mqtt/async_client.h>
 #include "unsafe_priority_queue.h"
 #pragma once
@@ -14,12 +16,18 @@ namespace mqtt{
 
   class mqtt_handler{
   public:
-    mqtt_handler(mqtt::async_client* client, size_t priority_levels, size_t capacity);
+    typedef std::function<void(const std::string& topic, const std::string value)> on_message_callback;
+
+    mqtt_handler(std::string mqtt_endpoint, mqtt::connect_options options, size_t priority_levels, size_t capacity);
     ~mqtt_handler();
     void close();
 
     void push_back(size_t prio, std::unique_ptr<message2> message) {
       queue_.push_back(prio, std::move(message));
+    }
+
+    void subscribe(std::string topic, on_message_callback cb){
+      message_callbacks_[topic]=cb;
     }
 
     void init();
@@ -63,20 +71,24 @@ namespace mqtt{
     void on_connected(); // from callback
     void on_connection_lost(); // from callback
     void on_publish_success(); // used from publish_listener
+    void on_message_arrived(mqtt::const_message_ptr msg); // used from callback
 
-    void reconnect();
+    //void reconnect();
     void pop_pending_tx();
 
     void thread();
     bool start_=false;
     bool exit_=false;
     unsafe_priority_queue<message2> queue_;
-    mqtt::async_client* client_=nullptr;
+    std::unique_ptr<mqtt::async_client> client_;
+    std::string mqtt_endpoint_;
+    mqtt::connect_options connect_options_;
     callback action_listener_;
     publish_listener publish_listener_;
 
     std::atomic<size_t> tx_unacked_bytes_;
     mqtt::thread_queue<size_t> pending_tx_;
+    std::map<std::string, on_message_callback> message_callbacks_;
     std::thread thread_;
   };
 }
